@@ -341,31 +341,86 @@ class Blip2OPT(Blip2Base):
         return projected_np
 
     @torch.no_grad()
-    def generate_rag(self, image, documents, query, k=3, **generate_kwargs):
+    def generate_rag(
+        self, 
+        image, 
+        documents, 
+        query, 
+        k=3,
+        use_nucleus_sampling=False,
+        num_beams=5,
+        num_captions=1,
+        min_length=1,
+        max_length=30,
+        top_p=0.9,
+        repetition_penalty=1.0,
+        length_penalty=1.0,
+        temperature=1,
+    ):
         """
-        RAG:
-         1) faiss_index가 없으면 build
-         2) 이미지 → query 임베딩
-         3) FAISS 검색
-         4) OPT 모델로 최종 텍스트 생성
+        RAG with BLIP2-OPT generation:
+         1) FAISS 인덱스 구축 (필요시)
+         2) 이미지 + 쿼리 임베딩 생성
+         3) 관련 문서 검색
+         4) OPT 모델로 텍스트 생성
         """
         if self.faiss_index is None:
             self.build_faiss_index(documents)
 
+        # 이미지 임베딩 생성
         q_embedding = self.get_query_embedding(image)
         distances, indices = self.faiss_index.search(q_embedding, k=k)
 
+        # 검색된 문서들 결합
         retrieved_docs = [self.documents[idx] for idx in indices[0]]
         combined_context = " ".join(retrieved_docs)
         input_text = f"Context: {combined_context}\nQuery: {query}"
 
-        opt_inputs = self.opt_tokenizer(input_text, return_tensors="pt", truncation=True)
-        opt_inputs = {k: v.to(self.device) for k, v in opt_inputs.items()}
+        # 토큰화
+        opt_tokens = self.opt_tokenizer(
+            input_text,
+            padding="max_length",
+            truncation=True,
+            max_length=max_length,
+            return_tensors="pt",
+        ).to(image.device)
 
-        with autocast("cuda", enabled=(self.opt_model.config.torch_dtype == torch.float16)):
-            output = self.opt_model.generate(**opt_inputs, **generate_kwargs)
+        input_ids = opt_tokens.input_ids
+        attention_mask = opt_tokens.attention_mask
 
-        output_text = self.opt_tokenizer.decode(output[0], skip_special_tokens=True)
+        with torch.cuda.amp.autocast(enabled=(self.device != torch.device("cpu"))):
+            # nucleus sampling
+            if use_nucleus_sampling:
+                input_ids = input_ids.repeat_interleave(num_captions, dim=0)
+                attention_mask = attention_mask.repeat_interleave(num_captions, dim=0)
+                num_beams = 1
+            # beam search
+            else:
+                input_ids = input_ids.repeat_interleave(num_beams, dim=0)
+                attention_mask = attention_mask.repeat_interleave(num_beams, dim=0)
+
+            outputs = self.opt_model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                do_sample=use_nucleus_sampling,
+                top_p=top_p,
+                temperature=temperature,
+                num_beams=num_beams,
+                max_new_tokens=max_length,
+                min_length=min_length,
+                eos_token_id=self.eos_token_id,
+                repetition_penalty=repetition_penalty,
+                length_penalty=length_penalty,
+                num_return_sequences=num_captions,
+            )
+
+        # 프롬프트 부분을 제외한 생성된 텍스트만 디코딩
+        prompt_length = opt_tokens.input_ids.shape[1]
+        output_text = self.opt_tokenizer.batch_decode(
+            outputs[:, prompt_length:], skip_special_tokens=True
+        )
+        output_text = [text.strip() for text in output_text]
+        
         return output_text
 
     @classmethod
