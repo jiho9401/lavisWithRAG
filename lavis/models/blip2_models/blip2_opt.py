@@ -351,11 +351,11 @@ class Blip2OPT(Blip2Base):
         num_beams=5,
         num_captions=1,
         min_length=1,
-        max_length=30,
+        max_length=100,
         top_p=0.9,
-        repetition_penalty=1.0,
+        repetition_penalty=1.2,
         length_penalty=1.0,
-        temperature=1,
+        temperature=0.8,
     ):
         """
         RAG with BLIP2-OPT generation:
@@ -390,7 +390,7 @@ class Blip2OPT(Blip2Base):
         
         # 3. 프롬프트 구성
         context = " ".join(retrieved_docs)
-        prompt = f"Based on the context and image, answer the following query.\nContext: {context}\nQuery: {query}\nAnswer:"
+        prompt = f"Based on the given context and image, provide a detailed answer to the query. Be specific and complete.\nContext: {context}\nQuery: {query}\nAnswer:"
 
         # 4. 텍스트 토큰화
         opt_tokens = self.opt_tokenizer(
@@ -416,7 +416,7 @@ class Blip2OPT(Blip2Base):
 
             outputs = self.opt_model.generate(
                 input_ids=input_ids,
-                query_embeds=query_embeds,  # 중요: 이미지 임베딩 추가
+                query_embeds=query_embeds,
                 attention_mask=attention_mask,
                 do_sample=use_nucleus_sampling,
                 top_p=top_p,
@@ -428,6 +428,8 @@ class Blip2OPT(Blip2Base):
                 repetition_penalty=repetition_penalty,
                 length_penalty=length_penalty,
                 num_return_sequences=num_captions,
+                no_repeat_ngram_size=3,
+                diversity_penalty=0.5,
             )
 
         # 5. 프롬프트 부분을 제외한 생성된 텍스트만 디코딩
