@@ -236,11 +236,19 @@ class Blip2OPT(Blip2Base):
             input_ids = opt_tokens.input_ids
             attention_mask = torch.cat([atts_opt, opt_tokens.attention_mask], dim=1)
 
+            # nucleus sampling
             if use_nucleus_sampling:
+                # 모든 텐서를 동일 배치만큼 repeat
                 query_embeds = inputs_opt.repeat_interleave(num_captions, dim=0)
-                num_beams = 1
+                input_ids = input_ids.repeat_interleave(num_captions, dim=0)
+                attention_mask = attention_mask.repeat_interleave(num_captions, dim=0)
+                num_beams = 1  # 내부적으로 더 이상 batch expand 안 함
+
+            # beam search
             else:
                 query_embeds = inputs_opt.repeat_interleave(num_beams, dim=0)
+                input_ids = input_ids.repeat_interleave(num_beams, dim=0)
+                attention_mask = attention_mask.repeat_interleave(num_beams, dim=0)
 
             outputs = self.opt_model.generate(
                 input_ids=input_ids,
