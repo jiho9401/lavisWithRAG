@@ -408,29 +408,41 @@ class Blip2OPT(Blip2Base):
                 query_embeds = inputs_opt.repeat_interleave(num_captions, dim=0)
                 input_ids = opt_tokens.input_ids.repeat_interleave(num_captions, dim=0)
                 attention_mask = attention_mask.repeat_interleave(num_captions, dim=0)
-                num_beams = 1
+                outputs = self.opt_model.generate(
+                    input_ids=input_ids,
+                    query_embeds=query_embeds,
+                    attention_mask=attention_mask,
+                    do_sample=True,
+                    top_p=top_p,
+                    temperature=temperature,
+                    num_beams=1,  # nucleus sampling에서는 beam search 사용 안 함
+                    max_new_tokens=max_length,
+                    min_length=min_length,
+                    eos_token_id=self.eos_token_id,
+                    repetition_penalty=repetition_penalty,
+                    length_penalty=length_penalty,
+                    num_return_sequences=num_captions,
+                    no_repeat_ngram_size=3,
+                )
             else:
                 query_embeds = inputs_opt.repeat_interleave(num_beams, dim=0)
                 input_ids = opt_tokens.input_ids.repeat_interleave(num_beams, dim=0)
                 attention_mask = attention_mask.repeat_interleave(num_beams, dim=0)
-
-            outputs = self.opt_model.generate(
-                input_ids=input_ids,
-                query_embeds=query_embeds,
-                attention_mask=attention_mask,
-                do_sample=use_nucleus_sampling,
-                top_p=top_p,
-                temperature=temperature,
-                num_beams=num_beams,
-                max_new_tokens=max_length,
-                min_length=min_length,
-                eos_token_id=self.eos_token_id,
-                repetition_penalty=repetition_penalty,
-                length_penalty=length_penalty,
-                num_return_sequences=num_captions,
-                no_repeat_ngram_size=3,
-                diversity_penalty=0.5,
-            )
+                outputs = self.opt_model.generate(
+                    input_ids=input_ids,
+                    query_embeds=query_embeds,
+                    attention_mask=attention_mask,
+                    do_sample=False,
+                    num_beams=num_beams,
+                    max_new_tokens=max_length,
+                    min_length=min_length,
+                    eos_token_id=self.eos_token_id,
+                    repetition_penalty=repetition_penalty,
+                    length_penalty=length_penalty,
+                    num_return_sequences=num_captions,
+                    no_repeat_ngram_size=3,
+                    diversity_penalty=0.5,  # beam search에서만 사용
+                )
 
         # 5. 프롬프트 부분을 제외한 생성된 텍스트만 디코딩
         prompt_length = opt_tokens.input_ids.shape[1]
