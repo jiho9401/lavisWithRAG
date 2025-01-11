@@ -255,7 +255,8 @@ class Blip2OPT(Blip2Base):
         for doc in documents:
             inputs = self.ctx_tokenizer(
                 doc, return_tensors="pt", truncation=True, max_length=512
-            ).cuda()
+            )
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
             with torch.inference_mode():
                 with torch.amp.autocast("cuda", enabled=(self.ctx_encoder.dtype == torch.float16)):
