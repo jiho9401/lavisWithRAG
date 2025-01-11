@@ -350,8 +350,8 @@ class Blip2OPT(Blip2Base):
         use_nucleus_sampling=False,
         num_beams=5,
         num_captions=1,
-        min_length=5,
-        max_length=100,
+        min_length=1,
+        max_length=30,
         top_p=0.9,
         repetition_penalty=1.0,
         length_penalty=1.0,
@@ -360,47 +360,63 @@ class Blip2OPT(Blip2Base):
         """
         RAG with BLIP2-OPT generation:
          1) FAISS 인덱스 구축 (필요시)
-         2) 이미지 + 쿼리 임베딩 생성
+         2) 이미지 처리 및 임베딩 생성
          3) 관련 문서 검색
          4) OPT 모델로 텍스트 생성
         """
         if self.faiss_index is None:
             self.build_faiss_index(documents)
 
-        # 이미지 임베딩 생성
+        # 1. 이미지 처리
+        with torch.cuda.amp.autocast(enabled=(self.device != torch.device("cpu"))):
+            image_embeds = self.ln_vision(self.visual_encoder(image))
+            image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(image.device)
+
+            query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
+            query_output = self.Qformer.bert(
+                query_embeds=query_tokens,
+                encoder_hidden_states=image_embeds,
+                encoder_attention_mask=image_atts,
+                return_dict=True,
+            )
+
+            inputs_opt = self.opt_proj(query_output.last_hidden_state)
+            atts_opt = torch.ones(inputs_opt.size()[:-1], dtype=torch.long).to(image.device)
+
+        # 2. RAG 검색
         q_embedding = self.get_query_embedding(image)
         distances, indices = self.faiss_index.search(q_embedding, k=k)
-
-        # 검색된 문서들 결합
         retrieved_docs = [self.documents[idx] for idx in indices[0]]
-        combined_context = " ".join(retrieved_docs)
-        input_text = f"Context: {combined_context}\nQuery: {query}"
+        
+        # 3. 프롬프트 구성
+        context = " ".join(retrieved_docs)
+        prompt = f"Based on the context and image, answer the following query.\nContext: {context}\nQuery: {query}\nAnswer:"
 
-        # 토큰화
+        # 4. 텍스트 토큰화
         opt_tokens = self.opt_tokenizer(
-            input_text,
+            prompt,
+            return_tensors="pt",
             padding="max_length",
             truncation=True,
-            max_length=max_length,
-            return_tensors="pt",
+            max_length=self.max_txt_len
         ).to(image.device)
 
-        input_ids = opt_tokens.input_ids
-        attention_mask = opt_tokens.attention_mask
+        attention_mask = torch.cat([atts_opt, opt_tokens.attention_mask], dim=1)
 
         with torch.cuda.amp.autocast(enabled=(self.device != torch.device("cpu"))):
-            # nucleus sampling
             if use_nucleus_sampling:
-                input_ids = input_ids.repeat_interleave(num_captions, dim=0)
+                query_embeds = inputs_opt.repeat_interleave(num_captions, dim=0)
+                input_ids = opt_tokens.input_ids.repeat_interleave(num_captions, dim=0)
                 attention_mask = attention_mask.repeat_interleave(num_captions, dim=0)
                 num_beams = 1
-            # beam search
             else:
-                input_ids = input_ids.repeat_interleave(num_beams, dim=0)
+                query_embeds = inputs_opt.repeat_interleave(num_beams, dim=0)
+                input_ids = opt_tokens.input_ids.repeat_interleave(num_beams, dim=0)
                 attention_mask = attention_mask.repeat_interleave(num_beams, dim=0)
 
             outputs = self.opt_model.generate(
                 input_ids=input_ids,
+                query_embeds=query_embeds,  # 중요: 이미지 임베딩 추가
                 attention_mask=attention_mask,
                 do_sample=use_nucleus_sampling,
                 top_p=top_p,
@@ -414,7 +430,7 @@ class Blip2OPT(Blip2Base):
                 num_return_sequences=num_captions,
             )
 
-        # 프롬프트 부분을 제외한 생성된 텍스트만 디코딩
+        # 5. 프롬프트 부분을 제외한 생성된 텍스트만 디코딩
         prompt_length = opt_tokens.input_ids.shape[1]
         output_text = self.opt_tokenizer.batch_decode(
             outputs[:, prompt_length:], skip_special_tokens=True
