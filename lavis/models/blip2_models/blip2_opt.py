@@ -209,33 +209,16 @@ class Blip2OPT(Blip2Base):
     ):
         """
         Args:
-            samples (dict): A dictionary containing the following keys:
+            samples (dict): A dictionary containing:
                 - image (torch.Tensor): A tensor of shape (batch_size, 3, H, W)
-            use_nucleus_sampling (bool): Whether to use nucleus sampling. If False, use top-k sampling.
             num_beams (int): Number of beams for beam search. 1 means no beam search.
             max_length (int): The maximum length of the sequence to be generated.
-            min_length (int): The minimum length of the sequence to be generated.
-            top_p (float): The cumulative probability for nucleus sampling.
-            repetition_penalty (float): The parameter for repetition penalty. 1.0 means no penalty.
-            num_captions (int): Number of captions to be generated for each image.
-        Returns:
-            captions (list): A list of strings of length batch_size * num_captions.
         """
-        #이미지를 초기화한다.
         image = samples["image"]
-
-        #이미지를 임베딩한다.
-        with torch.cuda.amp.autocast(
-            enabled=(self.device != torch.device("cpu"))
-        ):          
-            #이미지를 임베딩한다.
+        with torch.cuda.amp.autocast(enabled=(self.device != torch.device("cpu"))):
             image_embeds = self.ln_vision(self.visual_encoder(image))
-            #이미지 어텐션을 초기화한다.
-            image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(
-                image.device
-            )
+            image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(image.device)
 
-            #Qformer를 이용하여 이미지를 임베딩한다.
             query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
             query_output = self.Qformer.bert(
                 query_embeds=query_tokens,
@@ -244,34 +227,38 @@ class Blip2OPT(Blip2Base):
                 return_dict=True,
             )
 
-            #OPT 모델을 이용하여 이미지를 임베딩한다.
             inputs_opt = self.opt_proj(query_output.last_hidden_state)
-            #이미지 어텐션을 초기화한다.
             atts_opt = torch.ones(inputs_opt.size()[:-1], dtype=torch.long).to(image.device)
 
-            #프롬프트가 있는 경우, 프롬프트를 초기화한다.
             if "prompt" in samples.keys():
                 prompt = samples["prompt"]
             else:
                 prompt = self.prompt
 
-            prompt = [prompt] * image.size(0)
+            # 프롬프트를 배치 크기에 맞게 복제
+            if isinstance(prompt, str):
+                prompt = [prompt] * image.size(0)
 
-            #OPT 토크나이저를 이용하여 프롬프트를 토큰화한다.
-            opt_tokens = self.opt_tokenizer(prompt, return_tensors="pt").to(image.device)
-            #프롬프트의 입력 아이디를 초기화한다.
+            opt_tokens = self.opt_tokenizer(
+                prompt,
+                return_tensors="pt",
+                padding=True,
+                truncation=True
+            ).to(image.device)
+
             input_ids = opt_tokens.input_ids
-            #어텐션 마스크를 초기화한다.
             attention_mask = torch.cat([atts_opt, opt_tokens.attention_mask], dim=1)
 
-            #네클러우스 샘플링을 사용하는 경우, 쿼리 임베딩을 초기화한다.
             if use_nucleus_sampling:
                 query_embeds = inputs_opt.repeat_interleave(num_captions, dim=0)
+                input_ids = input_ids.repeat_interleave(num_captions, dim=0)
+                attention_mask = attention_mask.repeat_interleave(num_captions, dim=0)
                 num_beams = 1
             else:
                 query_embeds = inputs_opt.repeat_interleave(num_beams, dim=0)
+                input_ids = input_ids.repeat_interleave(num_beams, dim=0)
+                attention_mask = attention_mask.repeat_interleave(num_beams, dim=0)
 
-            #OPT 모델을 이용하여 입력을 임베딩한다.
             outputs = self.opt_model.generate(
                 input_ids=input_ids,
                 query_embeds=query_embeds,
@@ -288,15 +275,12 @@ class Blip2OPT(Blip2Base):
                 num_return_sequences=num_captions,
             )
 
-            #프롬프트 길이를 초기화한다.
             prompt_length = opt_tokens.input_ids.shape[1]
-            #OPT 토크나이저를 이용하여 출력 텍스트를 디코딩한다.
             output_text = self.opt_tokenizer.batch_decode(
                 outputs[:, prompt_length:], skip_special_tokens=True
             )
-            #출력 텍스트를 정리한다.
             output_text = [text.strip() for text in output_text]
-            #출력 텍스트를 반환한다.
+
             return output_text
 
     # --------------------------------------------------
