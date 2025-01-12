@@ -235,33 +235,25 @@ class Blip2OPT(Blip2Base):
             else:
                 prompt = self.prompt
 
-            # 프롬프트를 배치 크기에 맞게 복제
             if isinstance(prompt, str):
                 prompt = [prompt] * image.size(0)
 
             opt_tokens = self.opt_tokenizer(
                 prompt,
                 return_tensors="pt",
-                padding=True,
-                truncation=True
+                padding="longest",
+                truncation=True,
+                max_length=self.max_txt_len
             ).to(image.device)
 
-            input_ids = opt_tokens.input_ids
             attention_mask = torch.cat([atts_opt, opt_tokens.attention_mask], dim=1)
-
-            if use_nucleus_sampling:
-                query_embeds = inputs_opt.repeat_interleave(num_captions, dim=0)
-                input_ids = input_ids.repeat_interleave(num_captions, dim=0)
-                attention_mask = attention_mask.repeat_interleave(num_captions, dim=0)
-                num_beams = 1
-            else:
-                query_embeds = inputs_opt.repeat_interleave(num_beams, dim=0)
-                input_ids = input_ids.repeat_interleave(num_beams, dim=0)
-                attention_mask = attention_mask.repeat_interleave(num_beams, dim=0)
+            
+            # inputs_embeds 생성
+            inputs_embeds = self.opt_model.model.decoder.embed_tokens(opt_tokens.input_ids)
+            inputs_embeds = torch.cat([inputs_opt, inputs_embeds], dim=1)
 
             outputs = self.opt_model.generate(
-                input_ids=input_ids,
-                query_embeds=query_embeds,
+                inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
                 do_sample=use_nucleus_sampling,
                 top_p=top_p,
@@ -280,7 +272,7 @@ class Blip2OPT(Blip2Base):
                 outputs[:, prompt_length:], skip_special_tokens=True
             )
             output_text = [text.strip() for text in output_text]
-
+            
             return output_text
 
     # --------------------------------------------------
