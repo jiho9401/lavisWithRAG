@@ -207,13 +207,6 @@ class Blip2OPT(Blip2Base):
         num_captions=1,
         temperature=1,
     ):
-        """
-        Args:
-            samples (dict): A dictionary containing:
-                - image (torch.Tensor): A tensor of shape (batch_size, 3, H, W)
-            num_beams (int): Number of beams for beam search. 1 means no beam search.
-            max_length (int): The maximum length of the sequence to be generated.
-        """
         image = samples["image"]
         with torch.cuda.amp.autocast(enabled=(self.device != torch.device("cpu"))):
             image_embeds = self.ln_vision(self.visual_encoder(image))
@@ -228,8 +221,7 @@ class Blip2OPT(Blip2Base):
             )
 
             inputs_opt = self.opt_proj(query_output.last_hidden_state)
-            atts_opt = torch.ones(inputs_opt.size()[:-1], dtype=torch.long).to(image.device)
-
+            
             if "prompt" in samples.keys():
                 prompt = samples["prompt"]
             else:
@@ -246,15 +238,22 @@ class Blip2OPT(Blip2Base):
                 max_length=self.max_txt_len
             ).to(image.device)
 
-            attention_mask = torch.cat([atts_opt, opt_tokens.attention_mask], dim=1)
+            # OPT 입력 임베딩 준비
+            inputs_embeds = self.opt_model.model.decoder.embed_tokens(opt_tokens.input_ids)
+            inputs_embeds = torch.cat([inputs_opt, inputs_embeds], dim=1)
+
+            # attention mask 준비
+            attention_mask = torch.ones(
+                inputs_embeds.size()[:-1], 
+                dtype=torch.long,
+                device=image.device
+            )
 
             if use_nucleus_sampling:
-                query_embeds = inputs_opt.repeat_interleave(num_captions, dim=0)
-                input_ids = opt_tokens.input_ids.repeat_interleave(num_captions, dim=0)
+                inputs_embeds = inputs_embeds.repeat_interleave(num_captions, dim=0)
                 attention_mask = attention_mask.repeat_interleave(num_captions, dim=0)
                 outputs = self.opt_model.generate(
-                    input_ids=input_ids,
-                    query_embeds=query_embeds,
+                    inputs_embeds=inputs_embeds,
                     attention_mask=attention_mask,
                     do_sample=True,
                     top_p=top_p,
@@ -265,15 +264,14 @@ class Blip2OPT(Blip2Base):
                     eos_token_id=self.eos_token_id,
                     repetition_penalty=repetition_penalty,
                     length_penalty=length_penalty,
-                    num_return_sequences=1,
+                    pad_token_id=self.opt_tokenizer.pad_token_id,
+                    num_return_sequences=num_captions,
                 )
             else:
-                query_embeds = inputs_opt.repeat_interleave(num_beams, dim=0)
-                input_ids = opt_tokens.input_ids.repeat_interleave(num_beams, dim=0)
+                inputs_embeds = inputs_embeds.repeat_interleave(num_beams, dim=0)
                 attention_mask = attention_mask.repeat_interleave(num_beams, dim=0)
                 outputs = self.opt_model.generate(
-                    input_ids=input_ids,
-                    query_embeds=query_embeds,
+                    inputs_embeds=inputs_embeds,
                     attention_mask=attention_mask,
                     do_sample=False,
                     num_beams=num_beams,
@@ -282,10 +280,13 @@ class Blip2OPT(Blip2Base):
                     eos_token_id=self.eos_token_id,
                     repetition_penalty=repetition_penalty,
                     length_penalty=length_penalty,
-                    num_return_sequences=1,
+                    pad_token_id=self.opt_tokenizer.pad_token_id,
+                    num_return_sequences=num_captions,
                 )
 
-            prompt_length = opt_tokens.input_ids.shape[1]
+            # 프롬프트 길이 계산 (이미지 토큰 + 텍스트 토큰)
+            prompt_length = inputs_opt.size(1) + opt_tokens.input_ids.size(1)
+            
             output_text = self.opt_tokenizer.batch_decode(
                 outputs[:, prompt_length:], skip_special_tokens=True
             )
