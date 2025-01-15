@@ -247,25 +247,43 @@ class Blip2OPT(Blip2Base):
             ).to(image.device)
 
             attention_mask = torch.cat([atts_opt, opt_tokens.attention_mask], dim=1)
-            
-            # inputs_embeds 생성
-            inputs_embeds = self.opt_model.model.decoder.embed_tokens(opt_tokens.input_ids)
-            inputs_embeds = torch.cat([inputs_opt, inputs_embeds], dim=1)
 
-            outputs = self.opt_model.generate(
-                inputs_embeds=inputs_embeds,
-                attention_mask=attention_mask,
-                do_sample=use_nucleus_sampling,
-                top_p=top_p,
-                temperature=temperature,
-                num_beams=num_beams,
-                max_new_tokens=max_length,
-                min_length=min_length,
-                eos_token_id=self.eos_token_id,
-                repetition_penalty=repetition_penalty,
-                length_penalty=length_penalty,
-                num_return_sequences=num_captions,
-            )
+            if use_nucleus_sampling:
+                query_embeds = inputs_opt.repeat_interleave(num_captions, dim=0)
+                input_ids = opt_tokens.input_ids.repeat_interleave(num_captions, dim=0)
+                attention_mask = attention_mask.repeat_interleave(num_captions, dim=0)
+                outputs = self.opt_model.generate(
+                    input_ids=input_ids,
+                    query_embeds=query_embeds,
+                    attention_mask=attention_mask,
+                    do_sample=True,
+                    top_p=top_p,
+                    temperature=temperature,
+                    num_beams=1,
+                    max_new_tokens=max_length,
+                    min_length=min_length,
+                    eos_token_id=self.eos_token_id,
+                    repetition_penalty=repetition_penalty,
+                    length_penalty=length_penalty,
+                    num_return_sequences=1,
+                )
+            else:
+                query_embeds = inputs_opt.repeat_interleave(num_beams, dim=0)
+                input_ids = opt_tokens.input_ids.repeat_interleave(num_beams, dim=0)
+                attention_mask = attention_mask.repeat_interleave(num_beams, dim=0)
+                outputs = self.opt_model.generate(
+                    input_ids=input_ids,
+                    query_embeds=query_embeds,
+                    attention_mask=attention_mask,
+                    do_sample=False,
+                    num_beams=num_beams,
+                    max_new_tokens=max_length,
+                    min_length=min_length,
+                    eos_token_id=self.eos_token_id,
+                    repetition_penalty=repetition_penalty,
+                    length_penalty=length_penalty,
+                    num_return_sequences=1,
+                )
 
             prompt_length = opt_tokens.input_ids.shape[1]
             output_text = self.opt_tokenizer.batch_decode(
@@ -273,7 +291,7 @@ class Blip2OPT(Blip2Base):
             )
             output_text = [text.strip() for text in output_text]
             
-            return output_text
+            return output_text[:num_captions]
 
     # --------------------------------------------------
     # (아래부터 RAG 기능 추가)
