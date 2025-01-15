@@ -407,6 +407,11 @@ class Blip2OPT(Blip2Base):
         q_embedding = self.get_query_embedding(image)
         distances, indices = self.faiss_index.search(q_embedding, k=k)
         retrieved_docs = [self.documents[idx] for idx in indices[0]]
+
+        # 리트리벌 결과 출력
+        print("Retrieved documents:")
+        for i, (doc, dist) in enumerate(zip(retrieved_docs, distances[0])):
+            print(f"Document {i+1}: {doc} (Distance: {dist:.4f})")
         
         # 3. 프롬프트 구성
         context = " ".join(retrieved_docs)
