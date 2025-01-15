@@ -478,7 +478,8 @@ class Blip2OPT(Blip2Base):
         output_text = [text.strip() for text in output_text]
         
         # num_captions 개수만큼만 반환
-        print("Retrieved output_text:" + output_text)
+        print("Retrieved output_text:")
+        print(output_text)
         return output_text[:num_captions]
 
     @classmethod
