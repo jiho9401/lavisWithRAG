@@ -408,7 +408,7 @@ class Blip2OPT(Blip2Base):
         distances, indices = self.faiss_index.search(q_embedding, k=k)
         retrieved_docs = [self.documents[idx] for idx in indices[0]]
 
-        # 리트리벌 결과 출력
+        # 리트리벌 결과 출력 (정상적으로 출력 확인)
         print("Retrieved documents:")
         for i, (doc, dist) in enumerate(zip(retrieved_docs, distances[0])):
             print(f"Document {i+1}: {doc} (Distance: {dist:.4f})")
@@ -417,6 +417,7 @@ class Blip2OPT(Blip2Base):
         context = " ".join(retrieved_docs)
         prompt = f"Based on the given context and image, provide a detailed answer \
         to the query. Be specific and complete.\nContext: {context}\nQuery: {query}\nAnswer:"
+        print("Retrieved prompt:" + prompt)
 
         # 4. 텍스트 토큰화
         opt_tokens = self.opt_tokenizer(
@@ -477,6 +478,7 @@ class Blip2OPT(Blip2Base):
         output_text = [text.strip() for text in output_text]
         
         # num_captions 개수만큼만 반환
+        print("Retrieved output_text:" + output_text)
         return output_text[:num_captions]
 
     @classmethod
